@@ -175,6 +175,24 @@ class TranscriptionEngine:
                 from whisperlivekit.warmup import warmup_asr
                 warmup_asr(self.asr, config.warmup_file)
                 logger.info("Using Qwen3-ASR backend with LocalAgreement policy")
+            elif config.backend == "firered":
+                from whisperlivekit.firered_asr import FireRedASR2
+                self.asr = FireRedASR2(**transcription_common_params)
+                self.asr.confidence_validation = config.confidence_validation
+                self.asr.tokenizer = None
+                self.asr.buffer_trimming = config.buffer_trimming
+                self.asr.buffer_trimming_sec = config.buffer_trimming_sec
+                self.asr.backend_choice = "firered"
+                logger.info("Using FireRedASR2 backend with LocalAgreement policy")
+            elif config.backend == "sensevoice":
+                from whisperlivekit.sensevoice_asr import SenseVoiceASR
+                self.asr = SenseVoiceASR(**transcription_common_params)
+                self.asr.confidence_validation = config.confidence_validation
+                self.asr.tokenizer = None
+                self.asr.buffer_trimming = config.buffer_trimming
+                self.asr.buffer_trimming_sec = config.buffer_trimming_sec
+                self.asr.backend_choice = "sensevoice"
+                logger.info("Using SenseVoice backend with LocalAgreement policy")
             elif config.backend_policy == "simulstreaming":
                 simulstreaming_params = {
                     "disable_fast_encoder": config.disable_fast_encoder,
@@ -284,6 +302,8 @@ def online_factory(args, asr, language=None):
         from whisperlivekit.voxtral_hf_streaming import VoxtralHFStreamingOnlineProcessor
         return VoxtralHFStreamingOnlineProcessor(asr)
     if backend == "qwen3":
+        return OnlineASRProcessor(asr)
+    if backend in ("firered", "sensevoice"):
         return OnlineASRProcessor(asr)
     if backend == "cassette":
         return OnlineASRProcessor(asr)

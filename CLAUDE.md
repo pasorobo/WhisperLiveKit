@@ -112,7 +112,7 @@ WhisperLiveKit is a real-time speech transcription system using WebSockets.
 - Two streaming policies:
   - **LocalAgreement** (HypothesisBuffer) -- confirms tokens only when consecutive inferences agree.
   - **SimulStreaming** (AlignAtt attention-based) -- emits tokens as soon as alignment attention is confident.
-- 6 ASR backends: WhisperASR, FasterWhisperASR, MLXWhisper, VoxtralMLX, VoxtralHF, Qwen3.
+- 8 ASR backends: WhisperASR, FasterWhisperASR, MLXWhisper, VoxtralMLX, VoxtralHF, Qwen3, FireRedASR2 (Mandarin SOTA), SenseVoice (multilingual zh/en/yue/ja/ko + emotion / event detection).
 - **SessionASRProxy** wraps the shared ASR with a per-session language override, using a lock to safely swap `original_language` during `transcribe()`.
 - **DiffTracker** implements a snapshot-then-diff protocol for bandwidth-efficient incremental WebSocket updates (opt-in via `?mode=diff`).
 
@@ -131,6 +131,9 @@ WhisperLiveKit is a real-time speech transcription system using WebSockets.
 | `test_client.py` | Headless WebSocket test client (`wlk-test`) |
 | `test_harness.py` | In-process testing harness (`TestHarness`) for real E2E testing |
 | `test_cassettes.py` | Record/replay layer (`CassetteRecorder` / `CassetteASR`) — GPU-free pipeline tests via JSON fixtures under `tests/cassettes/` |
+| `firered_asr.py` | `FireRedASR2` — Mandarin SOTA (CER 2.89% avg-4); supports 20+ Chinese dialects, English, code-switching. Wraps the upstream batch+file-path API by writing each chunk to a temp WAV. |
+| `sensevoice_asr.py` | `SenseVoiceASR` — non-autoregressive multilingual model (zh/en/yue/ja/ko) with emotion + audio-event side-channels. Strips SenseVoice metadata tags before emitting tokens. |
+| `presets.py` | Named configuration presets (`ja-realtime`, `zh-accuracy`, `hri-multilang`, …) loaded via `WhisperLiveKitConfig.from_preset()` or `--preset`. |
 | `local_agreement/online_asr.py` | `OnlineASRProcessor` for LocalAgreement policy |
 | `simul_whisper/` | SimulStreaming policy implementation (AlignAtt) |
 

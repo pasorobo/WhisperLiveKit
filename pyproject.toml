@@ -52,6 +52,21 @@ voxtral-hf = [
     "mistral-common[audio]",
     "accelerate>=0.12",
 ]
+firered = [
+    # FireRedASR2 has no PyPI release at the time of writing — install the
+    # package directly from the GitHub repo. Requires HF / ModelScope access
+    # to download the AED or LLM model checkpoint at first use.
+    "fireredasr2s @ git+https://github.com/FireRedTeam/FireRedASR2S.git",
+    "soundfile",
+    "transformers>=4.40",
+    "accelerate>=0.12",
+]
+sensevoice = [
+    "funasr>=1.0.27",
+    "modelscope>=1.18.1",
+    "transformers>=4.40",
+    "accelerate>=0.12",
+]
 listen = ["sounddevice>=0.4.6"]
 cpu = ["torch>=2.0.0", "torchaudio>=2.0.0"]
 cu129 = [

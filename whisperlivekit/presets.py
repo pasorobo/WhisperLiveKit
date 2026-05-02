@@ -59,10 +59,12 @@ PRESETS: Dict[str, Dict[str, Any]] = {
     },
 
     # ── Chinese (Mandarin) ────────────────────────────────────────────────
-    # FireRedASR2 (Phase 1) will become the Chinese SOTA default; until then
-    # Qwen3 is the best available Chinese backend in this repo.
+    # FireRedASR2 holds the public Mandarin SOTA (avg CER 2.89% on 4 benches,
+    # outperforming Qwen3-ASR-1.7B / Doubao-ASR / Fun-ASR). qwen3-simul-kv is
+    # used for low-latency Chinese because FireRed is non-causal AED with no
+    # streaming policy yet.
     "zh-accuracy": {
-        "backend": "qwen3",
+        "backend": "firered",
         "lan": "zh",
         "buffer_trimming_sec": 15.0,
     },
@@ -79,8 +81,10 @@ PRESETS: Dict[str, Dict[str, Any]] = {
     },
     "hri-multilang": {
         # Robotics / human-robot interaction: low-latency + multilingual.
-        # SenseVoice (Phase 2) will become the default once integrated.
-        "backend": "qwen3",
+        # SenseVoice-Small handles zh/en/yue/ja/ko with one model and emits
+        # emotion + audio-event metadata as a side-channel — useful when a
+        # robot wants to react to laughter, applause, or sneezes.
+        "backend": "sensevoice",
         "lan": "auto",
         "min_chunk_size": 0.5,
     },
