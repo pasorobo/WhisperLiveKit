@@ -158,6 +158,25 @@ WhisperLiveKit is a real-time speech transcription system using WebSockets.
    - Add an `elif` branch in `TranscriptionEngine._do_init()` to instantiate the backend.
    - Add a routing case in `online_factory()` to return the appropriate online processor.
 4. Add the backend choice to CLI args in `parse_args.py`.
+5. (optional) Register a preset in `presets.py` so users can opt in via
+   `--preset <name>`.
+6. (optional) Add an isolation test under `tests/` that constructs the
+   wrapper via `__new__` (to skip model loading) and exercises
+   `ts_words` / `segments_end_ts` against handcrafted result dicts —
+   see `tests/test_firered_asr.py` and `tests/test_sensevoice_asr.py`.
+
+### Reference implementations
+
+| Backend | Style | What it demonstrates |
+|---|---|---|
+| `firered_asr.py` (`FireRedASR2`) | Batch + file-path upstream API | How to wrap a backend whose API takes paths, not numpy arrays — write each chunk to a temp WAV. Variant resolution (AED vs LLM) from `model_size`/`model_dir`. |
+| `sensevoice_asr.py` (`SenseVoiceASR`) | Numpy-in, metadata-tagged text out | How to parse a backend that emits `<\|lang\|><\|emotion\|><\|event\|><\|itn\|>` prefix tags and route them into `ASRToken.detected_language` plus side-channel metadata. |
+| `qwen3_asr.py` (`Qwen3ASR`) | Numpy-in, ForcedAligner timestamps | Recommended template for any AED model with native word-level timestamps — closest to what an `ASRBase` subclass should look like. |
+
+All three are non-causal AED and route through LocalAgreement only;
+SimulStreaming (AlignAtt) requires an alignment-heads JSON and a model
+that supports causal attention masking — see `qwen3_simul.py` for that
+pattern.
 
 ## Testing with TestHarness
 

@@ -108,6 +108,8 @@ See [docs/API.md](docs/API.md) for the complete API reference.
 | **Translation** | `uv sync --extra translation` | `pip install -e ".[translation]"` |
 | **Sentence tokenizer** | `uv sync --extra sentence_tokenizer` | `pip install -e ".[sentence_tokenizer]"` |
 | **Voxtral (HF backend)** | `uv sync --extra voxtral-hf` | `pip install -e ".[voxtral-hf]"` |
+| **FireRedASR2 (Mandarin SOTA)** | `uv sync --extra firered` | `pip install -e ".[firered]"` |
+| **SenseVoice (multilingual zh/en/yue/ja/ko)** | `uv sync --extra sensevoice` | `pip install -e ".[sensevoice]"` |
 | **Speaker diarization (Sortformer / NeMo)** | `uv sync --extra diarization-sortformer` | `pip install -e ".[diarization-sortformer]"` |
 | *[Not recommended]* Speaker diarization with Diart | `uv sync --extra diarization-diart` | `pip install -e ".[diarization-diart]"` |
 
@@ -164,6 +166,59 @@ wlk --backend voxtral
 
 Voxtral uses its own streaming policy and does not use LocalAgreement or SimulStreaming.
 See [BENCHMARK.md](BENCHMARK.md) for performance numbers.
+
+### Japanese / Chinese Backends
+
+WhisperLiveKit ships native support for the current SOTA Japanese and Chinese
+ASR models. CER (Character Error Rate, not WER) is the right evaluation metric
+for these languages — see `TestState.cer(reference)`.
+
+| Use case | First-choice backend | CLI |
+|---|---|---|
+| Japanese, accuracy-first | Qwen3-ASR-1.7B | `wlk --preset ja-accuracy` |
+| Japanese, real-time (≤500 ms) | Voxtral Mini Realtime | `wlk --preset ja-realtime` |
+| Japanese, broadcast / long-form | Qwen3-ASR (sentence trim) | `wlk --preset ja-broadcast` |
+| Chinese (Mandarin), accuracy-first | **FireRedASR2** (CER 2.89% avg-4) | `wlk --preset zh-accuracy` |
+| Chinese, low-latency | Qwen3-ASR SimulStreaming-KV | `wlk --preset zh-realtime` |
+| ja+zh+en mixed | Qwen3-ASR (auto) | `wlk --preset ja-zh-en` |
+| Multilingual robotics / HRI | **SenseVoice-Small** (zh/en/yue/ja/ko in one model + emotion + audio events) | `wlk --preset hri-multilang` |
+| Apple Silicon (ja or zh) | Qwen3-MLX SimulStreaming | `wlk --preset apple-silicon-ja` / `--preset apple-silicon-zh` |
+
+[FireRedASR2](https://github.com/FireRedTeam/FireRedASR2S) and
+[SenseVoice](https://github.com/FunAudioLLM/SenseVoice) require their own
+optional extras (see the table above). Both are wired through the
+LocalAgreement policy — they are non-causal AED models, so SimulStreaming
+(AlignAtt) is not applicable.
+
+```bash
+# Chinese SOTA accuracy
+pip install -e ".[firered]"
+wlk --preset zh-accuracy
+
+# Multilingual single-model deployment (HRI / robot dialogue)
+pip install -e ".[sensevoice]"
+wlk --preset hri-multilang
+
+# Override any preset value with an explicit CLI flag — flags always win
+wlk --preset ja-realtime --model large-v3
+```
+
+### Configuration Presets
+
+Named presets are registered in [`whisperlivekit/presets.py`](whisperlivekit/presets.py)
+and applied via `--preset <name>` (CLI) or
+`WhisperLiveKitConfig.from_preset(name, **overrides)` (programmatic). Explicit
+CLI flags or kwargs always override preset values.
+
+```python
+from whisperlivekit import WhisperLiveKitConfig, list_preset_names
+
+# Inspect what's available
+print(list_preset_names())
+
+# Build a config from a preset, with one field overridden
+cfg = WhisperLiveKitConfig.from_preset("zh-accuracy", model_cache_dir="/data/models")
+```
 
 ### Usage Examples
 
