@@ -70,6 +70,39 @@ non-three-tuple flows and need a future cassette family — v1 covers
 LocalAgreement-style backends (Whisper, FasterWhisper, MLXWhisper, Qwen3,
 SenseVoice, FireRedASR2).
 
+#### Web-sandbox network restrictions
+
+When developing on Claude Code Web (or any restricted-egress sandbox), expect:
+
+- ✅ `github.com` and `raw.githubusercontent.com` are reachable — small audio
+  fixtures hosted on GitHub raw URLs can be fetched.
+- ❌ `huggingface.co`, `huggingface-inference.co`, OpenAI's Whisper CDN, and
+  most public dataset CDNs (OpenSLR, archive.org, Wikimedia Commons) are
+  blocked. This means **`faster-whisper`, `openai-whisper`, and HF datasets
+  cannot download model weights or large datasets** in the sandbox.
+- → Real-model cassette recording must happen on a machine with HF access
+  (e.g. a GPU workstation). The Web sandbox can write/read cassettes,
+  exercise the pipeline glue, and run `compute_cer` / `compute_wer` against
+  the recorded outputs, but cannot itself produce a cassette from scratch.
+
+## Configuration presets
+
+Common deployment configurations are registered in `whisperlivekit/presets.py`
+under short names. Apply one via `WhisperLiveKitConfig.from_preset(name, **overrides)`
+or `wlk --preset <name>`. Explicit CLI flags override preset values.
+
+| Preset | Purpose |
+|---|---|
+| `ja-accuracy` | Japanese, accuracy-first (Qwen3 + segment trim 15s) |
+| `ja-realtime` | Japanese, low-latency (Voxtral 480ms + 0.5s chunks) |
+| `ja-broadcast` | Japanese long-form / broadcast (sentence-level trim) |
+| `zh-accuracy` | Chinese accuracy (Qwen3; FireRed becomes the default in Phase 1) |
+| `zh-realtime` | Chinese low-latency (Qwen3 SimulStreaming-KV) |
+| `ja-zh-en` | Multilingual auto-detect (Qwen3) |
+| `hri-multilang` | Robotics / human-robot interaction (Qwen3 + small chunks) |
+| `apple-silicon-{ja,zh}` | MLX on Apple Silicon |
+| `en-fast` | English baseline (faster-whisper large-v3-turbo) |
+
 ## Architecture
 
 WhisperLiveKit is a real-time speech transcription system using WebSockets.

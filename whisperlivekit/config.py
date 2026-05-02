@@ -109,3 +109,16 @@ class WhisperLiveKitConfig:
         if unknown:
             logger.warning("Unknown config keys ignored: %s", unknown)
         return cls(**{k: v for k, v in kwargs.items() if k in known})
+
+    @classmethod
+    def from_preset(cls, name: str, **overrides) -> "WhisperLiveKitConfig":
+        """Build a config from a named preset, with optional caller overrides.
+
+        Preset values are applied first; any keyword in ``overrides`` wins on
+        conflict. See :mod:`whisperlivekit.presets` for the registered names
+        and what each one configures.
+        """
+        from whisperlivekit.presets import get_preset
+        merged = get_preset(name)
+        merged.update(overrides)
+        return cls.from_kwargs(**merged)

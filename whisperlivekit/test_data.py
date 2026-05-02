@@ -124,6 +124,69 @@ def _decode_audio(audio_bytes: bytes) -> tuple:
 # Dataset-specific download functions
 # ---------------------------------------------------------------------------
 
+def _download_fleurs_samples(language: str, lang_code: str, n_samples: int = 2) -> List[Dict]:
+    """Download short samples from Google FLEURS for a given language.
+
+    FLEURS covers 102 languages with ~10s read-speech clips and clean
+    transcripts — small enough to fit in the test cache, large enough to be
+    useful for CER/WER scoring.
+
+    Args:
+        language: Short language tag for our metadata (e.g. "ja", "zh").
+        lang_code: FLEURS-specific config name (e.g. "ja_jp", "cmn_hans_cn").
+        n_samples: How many clips to keep.
+    """
+    _ensure_datasets()
+    import datasets.config
+    datasets.config.TORCHCODEC_AVAILABLE = False
+    from datasets import Audio, load_dataset
+
+    logger.info("Downloading FLEURS %s samples (streaming) ...", lang_code)
+    ds = load_dataset(
+        "google/fleurs",
+        lang_code,
+        split="test",
+        streaming=True,
+    )
+    ds = ds.cast_column("audio", Audio(decode=False))
+
+    samples = []
+    for i, item in enumerate(ds):
+        if i >= n_samples:
+            break
+
+        audio_array, sr = _decode_audio(item["audio"]["bytes"])
+        duration = len(audio_array) / sr
+        text = item.get("transcription", "") or item.get("raw_transcription", "")
+        sample_id = item.get("id", f"fleurs_{language}_{i}")
+
+        wav_name = f"fleurs_{language}_{i}.wav"
+        wav_path = CACHE_DIR / wav_name
+        _save_wav(wav_path, audio_array, sr)
+
+        # First sample gets the canonical "_short" suffix used in test_pipeline.py
+        name = f"fleurs_{language}_short" if i == 0 else f"fleurs_{language}_{i}"
+
+        samples.append({
+            "name": name,
+            "file": wav_name,
+            "reference": text,
+            "duration": round(duration, 2),
+            "sample_rate": sr,
+            "n_speakers": 1,
+            "language": language,
+            "source": f"google/fleurs ({lang_code} test split)",
+            "source_id": str(sample_id),
+            "utterances": [],
+        })
+        logger.info(
+            "  [%s/%d] %.1fs - %s",
+            language, i, duration, text[:60] + ("..." if len(text) > 60 else ""),
+        )
+
+    return samples
+
+
 def _download_librispeech_samples(n_samples: int = 3) -> List[Dict]:
     """Download short samples from LibriSpeech test-clean."""
     _ensure_datasets()
@@ -302,6 +365,20 @@ def download_test_samples(force: bool = False) -> List[TestSample]:
     except Exception as e:
         logger.warning("Failed to download LibriSpeech samples: %s", e)
 
+    # JA/ZH samples for CJK ASR evaluation (FireRedASR2, Qwen3, Voxtral, ...).
+    # FLEURS is preferred over CommonVoice because clip lengths are stable and
+    # transcripts are clean. Failures here are logged but not fatal — they
+    # require HuggingFace network access which is not always available.
+    try:
+        all_samples.extend(_download_fleurs_samples("ja", "ja_jp"))
+    except Exception as e:
+        logger.warning("Failed to download FLEURS Japanese samples: %s", e)
+
+    try:
+        all_samples.extend(_download_fleurs_samples("zh", "cmn_hans_cn"))
+    except Exception as e:
+        logger.warning("Failed to download FLEURS Chinese samples: %s", e)
+
     try:
         all_samples.extend(_download_ami_sample())
     except Exception as e:
@@ -328,8 +405,12 @@ def get_samples() -> List[TestSample]:
 def get_sample(name: str) -> TestSample:
     """Get a specific test sample by name.
 
-    Available names: 'librispeech_short', 'librispeech_1', 'librispeech_2',
-    'ami_meeting'.
+    Available names depend on which downloads succeeded but typically include:
+      - English: 'librispeech_short', 'librispeech_1', 'librispeech_2', 'ami_meeting'
+      - Japanese: 'fleurs_ja_short', 'fleurs_ja_1'
+      - Chinese: 'fleurs_zh_short', 'fleurs_zh_1'
+
+    Use :func:`list_sample_names` to see what is currently available.
 
     Raises:
         KeyError: If the sample name is not found.
