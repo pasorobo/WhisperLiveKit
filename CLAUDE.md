@@ -142,8 +142,16 @@ Key methods:
 - `speakers`, `n_speakers`, `has_silence` -- speaker/silence info
 - `line_at(time_s)`, `speaker_at(time_s)`, `text_at(time_s)` -- query by timestamp
 - `lines_between(start, end)`, `text_between(start, end)` -- query by time range
-- `wer(reference)`, `wer_detailed(reference)` -- evaluation against ground truth
+- `wer(reference)`, `wer_detailed(reference)` -- WER evaluation against ground truth
+- `cer(reference)`, `cer_detailed(reference)` -- CER evaluation (CJK languages: ja/zh/ko)
 - `speech_lines`, `silence_segments` -- filtered line lists
+
+For CJK languages, prefer `cer()` over `wer()`. CER strips whitespace and CJK/ASCII
+punctuation before scoring (see `whisperlivekit.metrics.normalize_cjk_text`), so
+results are robust to formatting differences between reference and hypothesis.
+Word-level WER for ja/zh requires a tokenizer (MeCab or jieba); that is left as
+future work. For now, use `cer()` for ja/zh and the existing `wer()` for
+whitespace-tokenized languages (en, fr, ...).
 
 ## OpenAI-Compatible REST API
 

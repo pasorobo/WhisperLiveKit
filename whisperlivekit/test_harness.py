@@ -270,6 +270,25 @@ class TestState:
         from whisperlivekit.metrics import compute_wer
         return compute_wer(reference, self.committed_text)
 
+    def cer(self, reference: str) -> float:
+        """Character Error Rate of committed text against reference.
+
+        Standard ASR metric for CJK languages (ja, zh, ko) where word
+        boundaries are not orthographically marked. Whitespace and CJK/ASCII
+        punctuation are stripped before scoring; see
+        :func:`whisperlivekit.metrics.normalize_cjk_text`.
+
+        Returns:
+            CER as a float (0.0 = perfect, 1.0 = 100% error rate).
+        """
+        from whisperlivekit.metrics import compute_cer
+        return compute_cer(reference, self.committed_text)["cer"]
+
+    def cer_detailed(self, reference: str) -> Dict:
+        """Full CER breakdown: substitutions, insertions, deletions, char counts."""
+        from whisperlivekit.metrics import compute_cer
+        return compute_cer(reference, self.committed_text)
+
     # ── Timing validation ──
 
     @property

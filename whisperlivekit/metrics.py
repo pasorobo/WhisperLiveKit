@@ -82,6 +82,101 @@ def compute_wer(reference: str, hypothesis: str) -> Dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Character Error Rate (CER) — required for CJK languages where word-level
+# tokenisation is not well-defined without MeCab / jieba.
+# ---------------------------------------------------------------------------
+
+# CJK and ASCII punctuation that is generally stripped before scoring.
+_CJK_PUNCT = "。、，．！？；：「」『』（）〈〉《》【】〔〕・〜～―ー…"
+_ASCII_PUNCT = ".,!?;:'\"()[]{}<>-_/\\"
+_PUNCT_TABLE = str.maketrans("", "", _CJK_PUNCT + _ASCII_PUNCT)
+
+
+def normalize_cjk_text(text: str) -> str:
+    """Normalize CJK text for CER comparison.
+
+    Steps:
+      1. Unicode NFC normalisation (compose accented forms).
+      2. Lowercase ASCII letters (a no-op on CJK characters).
+      3. Strip ALL whitespace — CJK has no native word boundaries, so any
+         whitespace in either reference or hypothesis is treated as noise.
+      4. Strip CJK and ASCII punctuation.
+    """
+    text = unicodedata.normalize("NFC", text)
+    text = text.lower()
+    text = re.sub(r"\s+", "", text)
+    text = text.translate(_PUNCT_TABLE)
+    return text
+
+
+def compute_cer(reference: str, hypothesis: str) -> Dict:
+    """Compute Character Error Rate via character-level Levenshtein distance.
+
+    CER is the standard ASR metric for CJK languages (Japanese, Chinese,
+    Korean) where word boundaries are not orthographically marked.
+
+    Args:
+        reference: Ground truth transcription.
+        hypothesis: Predicted transcription.
+
+    Returns:
+        Dict with keys: cer, substitutions, insertions, deletions,
+        ref_chars, hyp_chars. CER can exceed 1.0 if the hypothesis has more
+        errors than the reference has characters.
+    """
+    ref = normalize_cjk_text(reference)
+    hyp = normalize_cjk_text(hypothesis)
+
+    n = len(ref)
+    m = len(hyp)
+
+    if n == 0:
+        return {
+            "cer": 0.0 if m == 0 else float(m),
+            "substitutions": 0,
+            "insertions": m,
+            "deletions": 0,
+            "ref_chars": 0,
+            "hyp_chars": m,
+        }
+
+    # DP table: dp[i][j] = (edit_distance, substitutions, insertions, deletions).
+    # Mirrors compute_wer above but operates on Unicode characters instead of
+    # whitespace-separated word tokens.
+    dp = [[(0, 0, 0, 0) for _ in range(m + 1)] for _ in range(n + 1)]
+
+    for i in range(1, n + 1):
+        dp[i][0] = (i, 0, 0, i)
+    for j in range(1, m + 1):
+        dp[0][j] = (j, 0, j, 0)
+
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            if ref[i - 1] == hyp[j - 1]:
+                dp[i][j] = dp[i - 1][j - 1]
+            else:
+                sub = dp[i - 1][j - 1]
+                ins = dp[i][j - 1]
+                dele = dp[i - 1][j]
+
+                sub_cost = (sub[0] + 1, sub[1] + 1, sub[2], sub[3])
+                ins_cost = (ins[0] + 1, ins[1], ins[2] + 1, ins[3])
+                del_cost = (dele[0] + 1, dele[1], dele[2], dele[3] + 1)
+
+                dp[i][j] = min(sub_cost, del_cost, ins_cost, key=lambda x: x[0])
+
+    dist, subs, ins, dels = dp[n][m]
+    return {
+        "cer": dist / n,
+        "substitutions": subs,
+        "insertions": ins,
+        "deletions": dels,
+        "ref_chars": n,
+        "hyp_chars": m,
+    }
+
+
 def compute_timestamp_accuracy(
     predicted: List[Dict],
     reference: List[Dict],
