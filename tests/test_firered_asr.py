@@ -16,6 +16,7 @@ import pytest
 from whisperlivekit.firered_asr import (
     FIRERED_MODEL_MAPPING,
     FireRedASR2,
+    _resolve_tmp_root,
     _resolve_variant_and_path,
 )
 
@@ -143,3 +144,38 @@ def test_segments_end_ts_falls_back_to_audio_duration():
 def test_use_vad_is_false():
     asr = _make_wrapper()
     assert asr.use_vad() is False
+
+
+# ---------------------------------------------------------------------------
+# Temp-dir resolution
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_tmp_root_prefers_dev_shm_on_linux():
+    """When /dev/shm exists and is writable, it should be picked over /tmp."""
+    import os
+    import sys
+    if not (sys.platform.startswith("linux") and os.path.isdir("/dev/shm")
+            and os.access("/dev/shm", os.W_OK)):
+        pytest.skip("/dev/shm not available on this platform")
+    assert _resolve_tmp_root() == "/dev/shm"
+
+
+def test_resolve_tmp_root_returns_writable_dir():
+    """Whatever directory we get back must actually be usable."""
+    import os
+    root = _resolve_tmp_root()
+    assert os.path.isdir(root)
+    assert os.access(root, os.W_OK)
+
+
+def test_resolve_tmp_root_falls_back_when_dev_shm_missing(monkeypatch):
+    """If /dev/shm is unavailable, fall back to the OS temp dir."""
+    import tempfile
+
+    import whisperlivekit.firered_asr as fa
+
+    def _no_dev_shm(p):
+        return False if p == "/dev/shm" else True
+    monkeypatch.setattr(fa.os.path, "isdir", _no_dev_shm)
+    assert fa._resolve_tmp_root() == tempfile.gettempdir()

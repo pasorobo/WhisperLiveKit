@@ -203,6 +203,32 @@ wlk --preset hri-multilang
 wlk --preset ja-realtime --model large-v3
 ```
 
+### Streaming Characteristics — read this before picking a backend
+
+Not every WhisperLiveKit backend is truly real-time. Pick by use-case
+latency budget:
+
+| Backend | Streaming reality | Typical latency | When to use |
+|---|---|---|---|
+| **Voxtral Mini Realtime** | ✅ True streaming (dedicated decode loop) | ~480 ms | Robot dialogue, voice UI |
+| **Qwen3-MLX-Simul / Qwen3-SimulKV** | ✅ True streaming (AlignAtt + KV cache) | ~300-500 ms | Apple Silicon / accuracy + low latency |
+| **SimulStreaming** (Whisper) | ✅ True streaming (AlignAtt + KV cache) | ~500 ms | Whisper backend with low latency |
+| Whisper / FasterWhisper / Qwen3 (LocalAgreement) | ⚠️ Quasi-realtime | depends on chunk + buffer size | Accuracy-first transcription |
+| **FireRedASR2** | ⚠️ Quasi-realtime (chunk re-inference; per-call temp WAV in tmpfs on Linux) | ~1-2 s on GPU | Mandarin **accuracy-first** (CER 2.89% avg-4) |
+| **SenseVoice** | ⚠️ Quasi-realtime (chunk re-inference, numpy in) | ~1-2 s on GPU | Multilingual single-model HRI / captioning |
+
+**"Quasi-realtime"** means: committed transcripts arrive as audio
+streams in, but each LocalAgreement cycle re-runs full model inference
+on the growing audio buffer (up to `buffer_trimming_sec`, 15 s by
+default). Good for live captioning / meeting transcription; not
+appropriate for sub-second dialogue UI.
+
+If you need **sub-second response latency**, use one of the ✅ rows.
+If you need **best-in-class CER on Mandarin** and can absorb ~1-2 s
+latency, use FireRedASR2. For both accuracy and low latency on Chinese,
+the `zh-realtime` preset chooses Qwen3-SimulKV — slightly worse CER than
+FireRed, but truly streaming.
+
 ### Configuration Presets
 
 Named presets are registered in [`whisperlivekit/presets.py`](whisperlivekit/presets.py)

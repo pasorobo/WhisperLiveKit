@@ -20,13 +20,17 @@ CLI::
     wlk --preset ja-realtime           # apply preset defaults
     wlk --preset ja-realtime --lan en  # preset + explicit override
 
-Notes on backend choices
-------------------------
+Realtime tiers
+--------------
 
-The presets reflect current backend availability in this repo. As FireRedASR2
-(Phase 1) and SenseVoice (Phase 2) land, the ``zh-*`` and ``hri-*`` entries
-will switch to those backends. For now they fall back to Qwen3-ASR which is
-the multilingual SOTA already wired in.
+The ``-realtime`` presets target true-streaming backends (Voxtral, Qwen3
+SimulStreaming variants) with sub-second latency. The ``-accuracy`` and
+``-broadcast`` presets target quasi-realtime backends (FireRedASR2, Qwen3
+LocalAgreement) where each LocalAgreement cycle re-runs full inference;
+expect ~1-2 s latency on GPU but better CER. ``hri-multilang`` uses
+SenseVoice, which is non-streaming but covers zh/en/yue/ja/ko with one
+model — pick it when single-model multilingual matters more than
+sub-second response.
 """
 
 from __future__ import annotations
@@ -39,19 +43,21 @@ from typing import Any, Dict, List
 # defaults and let the user toggle via CLI flags directly.
 PRESETS: Dict[str, Dict[str, Any]] = {
     # ── Japanese ───────────────────────────────────────────────────────────
+    # ja-accuracy: quasi-realtime (Qwen3 LocalAgreement, ~1-2s lag)
     "ja-accuracy": {
         "backend": "qwen3",
         "lan": "ja",
         "buffer_trimming": "segment",
         "buffer_trimming_sec": 15.0,
     },
+    # ja-realtime: TRUE streaming (Voxtral Mini Realtime, ~480ms)
     "ja-realtime": {
         "backend": "voxtral",
         "lan": "ja",
         "min_chunk_size": 0.5,
     },
+    # ja-broadcast: quasi-realtime, sentence-aware trim for long-form
     "ja-broadcast": {
-        # Long-form: prefer sentence-level trimming for natural punctuation.
         "backend": "qwen3",
         "lan": "ja",
         "buffer_trimming": "sentence",
@@ -59,15 +65,18 @@ PRESETS: Dict[str, Dict[str, Any]] = {
     },
 
     # ── Chinese (Mandarin) ────────────────────────────────────────────────
-    # FireRedASR2 holds the public Mandarin SOTA (avg CER 2.89% on 4 benches,
-    # outperforming Qwen3-ASR-1.7B / Doubao-ASR / Fun-ASR). qwen3-simul-kv is
-    # used for low-latency Chinese because FireRed is non-causal AED with no
-    # streaming policy yet.
+    # zh-accuracy: quasi-realtime — FireRedASR2 holds the public Mandarin
+    # SOTA (avg CER 2.89% on 4 benches, outperforming Qwen3-ASR-1.7B /
+    # Doubao-ASR / Fun-ASR). FireRed is non-causal AED so each
+    # LocalAgreement cycle re-runs full inference (~1-2 s latency); use
+    # zh-realtime instead when sub-second response matters more than CER.
     "zh-accuracy": {
         "backend": "firered",
         "lan": "zh",
         "buffer_trimming_sec": 15.0,
     },
+    # zh-realtime: TRUE streaming (Qwen3 SimulStreaming with KV cache,
+    # ~300-500 ms). Slightly worse CER than FireRed but sub-second.
     "zh-realtime": {
         "backend": "qwen3-simul-kv",
         "lan": "zh",
@@ -80,10 +89,11 @@ PRESETS: Dict[str, Dict[str, Any]] = {
         "lan": "auto",
     },
     "hri-multilang": {
-        # Robotics / human-robot interaction: low-latency + multilingual.
-        # SenseVoice-Small handles zh/en/yue/ja/ko with one model and emits
-        # emotion + audio-event metadata as a side-channel — useful when a
-        # robot wants to react to laughter, applause, or sneezes.
+        # Robotics / human-robot interaction: multilingual + emotion + events
+        # in a single non-streaming model. Quasi-realtime — SenseVoice
+        # processes whole chunks per call, so expect ~1-2 s lag. If
+        # sub-second response is required, switch to "ja-realtime"
+        # (Voxtral) and lose the emotion/event side-channel.
         "backend": "sensevoice",
         "lan": "auto",
         "min_chunk_size": 0.5,

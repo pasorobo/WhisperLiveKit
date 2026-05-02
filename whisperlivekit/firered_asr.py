@@ -5,6 +5,21 @@ FireRedASR2-AED / FireRedASR2-LLM achieve SOTA Mandarin CER (avg 2.89% on
 and Fun-ASR-Nano-2512 on the FireRedTeam evaluations. Supports Mandarin,
 20+ Chinese dialects/accents, English, and code-switching.
 
+Real-time characteristics — read this before picking it for live dialogue
+------------------------------------------------------------------------
+
+FireRedASR2 is a **non-causal Attention-based Encoder-Decoder**. It is *not*
+a streaming model. WhisperLiveKit drives it through the LocalAgreement
+policy, which means each ``OnlineASRProcessor`` cycle re-runs full
+inference on the growing audio buffer (up to ``buffer_trimming_sec``
+seconds — 15 s by default).
+
+In practice that gives **quasi-realtime** transcription suitable for live
+captioning / meeting transcription where ~1-2 s latency is acceptable. For
+sub-second dialogue UI (robot interaction, voice control), use Voxtral
+Realtime (~480 ms) or one of the SimulStreaming variants (Qwen3-SimulKV,
+Qwen3-MLX-Simul, SimulStreaming) instead.
+
 Implementation notes
 --------------------
 
@@ -14,14 +29,16 @@ Implementation notes
       model.transcribe([uttid], [wav_path]) -> [{"text": ..., "timestamp": ...}]
 
   WhisperLiveKit's :class:`OnlineASRProcessor` passes numpy buffers, so this
-  wrapper writes each chunk to a temp WAV (16 kHz mono PCM) and feeds the
-  path. The overhead is small relative to inference time.
+  wrapper writes each chunk to a per-call temp WAV (16 kHz mono PCM) and
+  feeds the path. On Linux the temp directory is ``/dev/shm`` (tmpfs in
+  RAM) when available, eliminating disk I/O from the hot path; macOS and
+  Windows fall back to the system temp dir.
 
 * Word-level timestamps are available with the AED variant when
   ``return_timestamp=True`` is set on ``FireRedAsr2Config``; the LLM variant
   does not produce per-word timing.
 
-* No streaming AlignAtt support yet — FireRed v2 is non-causal AED. The
+* No streaming AlignAtt support — FireRed v2 is non-causal AED. The
   backend is therefore wired through the LocalAgreement policy only.
 
 * This module never imports ``fireredasr2s`` at import time. All model code
@@ -84,6 +101,21 @@ def _resolve_variant_and_path(model_size: Optional[str], model_dir: Optional[str
     return variant, path
 
 
+def _resolve_tmp_root() -> str:
+    """Return the fastest writable temp directory for buffered audio.
+
+    Linux ``/dev/shm`` is a tmpfs mount backed by RAM, so writing the
+    per-call WAV there avoids disk I/O entirely (~1-2 ms vs ~5-10 ms on
+    a typical SSD). Falls back to the OS default temp dir on macOS,
+    Windows, or any system where ``/dev/shm`` is missing or read-only.
+    """
+    if os.name == "posix":
+        candidate = "/dev/shm"
+        if os.path.isdir(candidate) and os.access(candidate, os.W_OK):
+            return candidate
+    return tempfile.gettempdir()
+
+
 class FireRedASR2(ASRBase):
     """LocalAgreement-compatible wrapper around FireRedASR2."""
 
@@ -103,9 +135,14 @@ class FireRedASR2(ASRBase):
         self.transcribe_kargs = {}
         self.original_language = None if lan == "auto" else lan
         self._call_counter = 0  # for unique uttids per session
-        self._tmp_root = tempfile.mkdtemp(prefix="firered_buf_")
+        # Per-call temp WAVs land here (/dev/shm on Linux). Each call uses
+        # tempfile.mkstemp inside this dir so there is no persistent file
+        # to leak — the directory itself is shared (e.g. /dev/shm) and
+        # not owned by us.
+        self._tmp_root = _resolve_tmp_root()
         self._variant, self._model_path = _resolve_variant_and_path(model_size, model_dir)
         self.model = self.load_model(model_size, cache_dir, model_dir)
+        logger.info("FireRedASR2 temp dir: %s", self._tmp_root)
 
     # ── Model loading (lazy import to keep this file safe on Web sandboxes) ──
 
@@ -151,10 +188,21 @@ class FireRedASR2(ASRBase):
     # ── Inference ──
 
     def transcribe(self, audio: np.ndarray, init_prompt: str = ""):
-        """Write the audio buffer to a temp WAV and run a single-utterance batch."""
+        """Write the audio buffer to a temp WAV and run a single-utterance batch.
+
+        The WAV lives in ``self._tmp_root`` (``/dev/shm`` on Linux when
+        available) and is unlinked immediately after inference returns,
+        so disk usage is bounded by one in-flight call.
+        """
         self._call_counter += 1
         uttid = f"buf_{self._call_counter:06d}"
-        wav_path = os.path.join(self._tmp_root, f"{uttid}.wav")
+
+        # mkstemp gives a unique path inside the chosen tmpfs/temp dir
+        # without us needing to maintain our own collision-avoiding scheme.
+        fd, wav_path = tempfile.mkstemp(
+            prefix="firered_", suffix=".wav", dir=self._tmp_root,
+        )
+        os.close(fd)
 
         # FireRedASR2 requires 16 kHz 16-bit mono PCM. Audio entering this
         # method is float32 [-1, 1] from the audio pipeline.

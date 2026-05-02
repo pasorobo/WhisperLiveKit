@@ -6,6 +6,16 @@ with built-in speech emotion recognition and audio event detection. Useful
 for HRI / robotics where a single model needs to accept any of the above
 without language switching.
 
+Real-time characteristics
+-------------------------
+
+SenseVoice-Small is non-autoregressive but **non-streaming**: it expects a
+full audio chunk per inference call. WhisperLiveKit drives it through
+LocalAgreement, so each cycle re-runs full inference on the growing
+buffer. That gives **quasi-realtime** transcription useful for live
+captioning and accuracy-first HRI; it is not appropriate for sub-second
+dialogue UI. For low-latency multilingual use, prefer Voxtral Realtime.
+
 Implementation notes
 --------------------
 

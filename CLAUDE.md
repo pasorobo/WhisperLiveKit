@@ -112,7 +112,17 @@ WhisperLiveKit is a real-time speech transcription system using WebSockets.
 - Two streaming policies:
   - **LocalAgreement** (HypothesisBuffer) -- confirms tokens only when consecutive inferences agree.
   - **SimulStreaming** (AlignAtt attention-based) -- emits tokens as soon as alignment attention is confident.
-- 8 ASR backends: WhisperASR, FasterWhisperASR, MLXWhisper, VoxtralMLX, VoxtralHF, Qwen3, FireRedASR2 (Mandarin SOTA), SenseVoice (multilingual zh/en/yue/ja/ko + emotion / event detection).
+- 8 ASR backends, in two streaming tiers:
+  - **True streaming** (KV-cache or dedicated streaming decode, sub-second
+    latency): VoxtralMLX, VoxtralHF, Qwen3-MLX-Simul, Qwen3-SimulKV,
+    SimulStreaming.
+  - **Quasi-realtime** (LocalAgreement re-runs full inference on the growing
+    buffer each cycle; ~1-2 s latency on GPU): WhisperASR, FasterWhisperASR,
+    MLXWhisper, Qwen3, **FireRedASR2** (Mandarin accuracy-first), and
+    **SenseVoice** (multilingual zh/en/yue/ja/ko, emotion + audio events).
+  Pick a "true streaming" backend for robot dialogue / voice UI;
+  "quasi-realtime" backends are appropriate for live captioning, meeting
+  transcription, and offline accuracy-first transcription.
 - **SessionASRProxy** wraps the shared ASR with a per-session language override, using a lock to safely swap `original_language` during `transcribe()`.
 - **DiffTracker** implements a snapshot-then-diff protocol for bandwidth-efficient incremental WebSocket updates (opt-in via `?mode=diff`).
 
