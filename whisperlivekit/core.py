@@ -102,7 +102,19 @@ class TranscriptionEngine:
         }
 
         if config.transcription:
-            if config.backend == "vllm-realtime":
+            if config.backend == "cassette":
+                from whisperlivekit.test_cassettes import CassetteASR
+                if not config.cassette_path:
+                    raise ValueError("backend='cassette' requires cassette_path")
+                self.tokenizer = None
+                self.asr = CassetteASR.load(
+                    config.cassette_path, strict=config.cassette_strict
+                )
+                logger.info(
+                    "Using Cassette replay backend (%s, %d calls)",
+                    self.asr.cassette_id, self.asr.n_calls,
+                )
+            elif config.backend == "vllm-realtime":
                 from whisperlivekit.vllm_realtime import VLLMRealtimeASR
                 self.tokenizer = None
                 self.asr = VLLMRealtimeASR(
@@ -272,6 +284,8 @@ def online_factory(args, asr, language=None):
         from whisperlivekit.voxtral_hf_streaming import VoxtralHFStreamingOnlineProcessor
         return VoxtralHFStreamingOnlineProcessor(asr)
     if backend == "qwen3":
+        return OnlineASRProcessor(asr)
+    if backend == "cassette":
         return OnlineASRProcessor(asr)
     if args.backend_policy == "simulstreaming":
         from whisperlivekit.simul_whisper import SimulStreamingOnlineProcessor

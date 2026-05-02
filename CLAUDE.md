@@ -31,6 +31,45 @@ async def main():
 asyncio.run(main())
 ```
 
+### Cassette replay (GPU-free testing)
+
+For environments without a GPU or model weights (Claude Code Web, CI sandboxes,
+quick iteration on glue logic), the **cassette mechanism** replays a previously
+recorded ASR session. The full pipeline (FFmpeg, VAD, online policy,
+DiffTracker, output formatting) runs for real; only the model inference is
+served from a JSON file.
+
+```python
+# Tier 1 — Web sandbox / no GPU: replay an existing cassette
+async with TestHarness.replay("tests/cassettes/qwen3_ja_short_001.json") as h:
+    await h.feed("tests/fixtures/ja_short.wav", speed=0)
+    result = await h.finish()
+    print(result.text)
+```
+
+```python
+# Tier 2 — GPU machine: record once, commit the cassette JSON
+async with TestHarness.record(
+    cassette_path="tests/cassettes/qwen3_ja_short_001.json",
+    backend="qwen3", lan="ja",
+) as h:
+    await h.feed("tests/fixtures/ja_short.wav", speed=0)
+    await h.finish()
+# Cassette is auto-saved on clean __aexit__.
+```
+
+The CLI helper `scripts/record_cassettes.py` wraps this for batch recording.
+The cassette is hash-keyed on the exact audio buffer passed to `transcribe()`,
+so changes to buffer-trimming or chunking will produce a `CassetteMissError`
+on Tier 1 — that is intentional. Re-record on the GPU machine when this fires.
+
+The `cassette` backend is also exposed via `WhisperLiveKitConfig` (set
+`backend="cassette"` and `cassette_path=...`) so cassettes plug into anything
+that accepts a `TranscriptionEngine`. SimulStreaming and Voxtral HF use
+non-three-tuple flows and need a future cassette family — v1 covers
+LocalAgreement-style backends (Whisper, FasterWhisper, MLXWhisper, Qwen3,
+SenseVoice, FireRedASR2).
+
 ## Architecture
 
 WhisperLiveKit is a real-time speech transcription system using WebSockets.
@@ -58,6 +97,7 @@ WhisperLiveKit is a real-time speech transcription system using WebSockets.
 | `parse_args.py` | CLI argument parser, returns `WhisperLiveKitConfig` |
 | `test_client.py` | Headless WebSocket test client (`wlk-test`) |
 | `test_harness.py` | In-process testing harness (`TestHarness`) for real E2E testing |
+| `test_cassettes.py` | Record/replay layer (`CassetteRecorder` / `CassetteASR`) — GPU-free pipeline tests via JSON fixtures under `tests/cassettes/` |
 | `local_agreement/online_asr.py` | `OnlineASRProcessor` for LocalAgreement policy |
 | `simul_whisper/` | SimulStreaming policy implementation (AlignAtt) |
 
@@ -130,4 +170,4 @@ The `model` parameter is accepted but ignored (uses the server's configured back
 - Do not create a second `TranscriptionEngine` instance. It is a singleton; the constructor returns the existing instance after the first call.
 - Do not modify `original_language` on the shared ASR directly. Use `SessionASRProxy` for per-session language overrides.
 - Do not assume the frontend handles diff protocol messages. Diff mode is opt-in (`?mode=diff`) and ignored by default.
-- Do not write mock-based unit tests. Use `TestHarness` with real audio for pipeline testing.
+- Do not write mock-based unit tests. Use `TestHarness` with real audio for pipeline testing. The one exception is cassette-replay tests (`TestHarness.replay(...)`) which are still real-pipeline tests — only the model inference is replaced with a recorded JSON.
