@@ -46,6 +46,7 @@ import asyncio
 import logging
 import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from whisperlivekit.timed_objects import FrontData
@@ -269,6 +270,25 @@ class TestState:
         from whisperlivekit.metrics import compute_wer
         return compute_wer(reference, self.committed_text)
 
+    def cer(self, reference: str) -> float:
+        """Character Error Rate of committed text against reference.
+
+        Standard ASR metric for CJK languages (ja, zh, ko) where word
+        boundaries are not orthographically marked. Whitespace and CJK/ASCII
+        punctuation are stripped before scoring; see
+        :func:`whisperlivekit.metrics.normalize_cjk_text`.
+
+        Returns:
+            CER as a float (0.0 = perfect, 1.0 = 100% error rate).
+        """
+        from whisperlivekit.metrics import compute_cer
+        return compute_cer(reference, self.committed_text)["cer"]
+
+    def cer_detailed(self, reference: str) -> Dict:
+        """Full CER breakdown: substitutions, insertions, deletions, char counts."""
+        from whisperlivekit.metrics import compute_cer
+        return compute_cer(reference, self.committed_text)
+
     # ── Timing validation ──
 
     @property
@@ -469,6 +489,53 @@ class TestHarness:
         self._audio_position = 0.0
         self._history: List[TestState] = []
         self._on_update: Optional[Callable[[TestState], None]] = None
+        # Optional recorder wrapping the engine.asr so that a real-model run
+        # produces a cassette. Set by TestHarness.record(...).
+        self._recorder = None
+        self._recorder_save_path: Optional[str] = None
+
+    @classmethod
+    def replay(cls, cassette_path: str, **overrides: Any) -> "TestHarness":
+        """Build a harness that replays a cassette instead of loading a model.
+
+        The pipeline (FFmpeg, VAD, online policy, output formatting) runs
+        for real; only the ASR backend is served from the JSON cassette.
+        Use this for Tier 1 (no-GPU) tests on Claude Code Web etc.
+
+        Args:
+            cassette_path: Path to a cassette JSON file (see test_cassettes.py).
+            **overrides: Extra kwargs forwarded to TranscriptionEngine
+                (e.g. ``vac=False``, ``diarization=False``). They override the
+                cassette's recorded settings where applicable.
+        """
+        kwargs: Dict[str, Any] = {
+            "backend": "cassette",
+            "cassette_path": cassette_path,
+            "vac": False,           # cassette is hash-keyed → keep audio bytes deterministic
+            "diarization": False,   # diarization is independent and tested separately
+            "pcm_input": True,
+        }
+        kwargs.update(overrides)
+        return cls(**kwargs)
+
+    @classmethod
+    def record(
+        cls,
+        cassette_path: str,
+        cassette_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> "TestHarness":
+        """Build a harness that wraps the real ASR with a CassetteRecorder.
+
+        After the run, call ``await harness.save_cassette()`` (or rely on
+        ``__aexit__`` if you set ``cassette_path``) to write the cassette
+        to disk. Intended for Tier 2 — runs on a GPU machine to produce
+        fixtures that Tier 1 tests can replay.
+        """
+        h = cls(**kwargs)
+        h._recorder_save_path = cassette_path
+        h._recorder_cassette_id = cassette_id or Path(cassette_path).stem
+        return h
 
     async def __aenter__(self) -> "TestHarness":
         from whisperlivekit.audio_processor import AudioProcessor
@@ -479,16 +546,48 @@ class TestHarness:
         # requested config doesn't match any cached engine.
         cache_key = tuple(sorted(self._engine_kwargs.items()))
 
-        if cache_key not in _engine_cache:
+        # Recording wraps engine.asr in a CassetteRecorder, and replay's
+        # CassetteASR carries per-session state (_next_call_idx). Both must
+        # bypass the engine cache to avoid leaking state into other tests.
+        is_cassette_mode = (
+            self._recorder_save_path is not None
+            or self._engine_kwargs.get("backend") == "cassette"
+        )
+        if is_cassette_mode:
             TranscriptionEngine.reset()
-            _engine_cache[cache_key] = TranscriptionEngine(**self._engine_kwargs)
+            engine = TranscriptionEngine(**self._engine_kwargs)
+        else:
+            if cache_key not in _engine_cache:
+                TranscriptionEngine.reset()
+                _engine_cache[cache_key] = TranscriptionEngine(**self._engine_kwargs)
+            engine = _engine_cache[cache_key]
 
-        engine = _engine_cache[cache_key]
+        # Optional: wrap the loaded ASR with a CassetteRecorder so the run
+        # produces a cassette artefact that Tier 1 can replay later.
+        if self._recorder_save_path is not None:
+            from whisperlivekit.test_cassettes import CassetteRecorder
+            engine.asr = CassetteRecorder(
+                engine.asr,
+                cassette_id=getattr(self, "_recorder_cassette_id", "recorded"),
+                backend=self._engine_kwargs.get("backend", ""),
+                model_id=self._engine_kwargs.get("model_size", ""),
+                language=self._engine_kwargs.get("lan"),
+            )
+            self._recorder = engine.asr
 
         self._processor = AudioProcessor(transcription_engine=engine)
         self._results_gen = await self._processor.create_tasks()
         self._collect_task = asyncio.create_task(self._collect_results())
         return self
+
+    async def save_cassette(self, path: Optional[str] = None) -> None:
+        """Persist the recorder's cassette to disk (record mode only)."""
+        if self._recorder is None:
+            raise RuntimeError("No recorder attached — use TestHarness.record(...)")
+        target = path or self._recorder_save_path
+        if not target:
+            raise ValueError("Cassette save path required")
+        self._recorder.save(target)
 
     async def __aexit__(self, *exc: Any) -> None:
         if self._processor:
@@ -499,6 +598,12 @@ class TestHarness:
                 await self._collect_task
             except asyncio.CancelledError:
                 pass
+        # Auto-save cassette on clean exit when in record mode.
+        if self._recorder is not None and self._recorder_save_path and not exc[0]:
+            try:
+                self._recorder.save(self._recorder_save_path)
+            except Exception:
+                logger.exception("Failed to save cassette to %s", self._recorder_save_path)
 
     async def _collect_results(self) -> None:
         """Background task: consume results from the pipeline."""

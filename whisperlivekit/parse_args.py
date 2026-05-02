@@ -1,9 +1,30 @@
 
 from argparse import ArgumentParser
 
+from whisperlivekit.presets import get_preset, list_preset_names
+
 
 def parse_args():
+    # Two-pass parsing: first detect --preset, then use it as defaults so
+    # explicit CLI flags naturally override the preset values.
+    preset_parser = ArgumentParser(add_help=False)
+    preset_parser.add_argument("--preset", type=str, default=None,
+                               choices=list_preset_names())
+    preset_args, _ = preset_parser.parse_known_args()
+    preset_defaults = get_preset(preset_args.preset) if preset_args.preset else {}
+
     parser = ArgumentParser(description="Whisper FastAPI Online Server")
+    parser.add_argument(
+        "--preset",
+        type=str,
+        default=None,
+        choices=list_preset_names(),
+        help=(
+            "Apply a named configuration preset before evaluating other flags. "
+            "Explicit CLI flags override preset values. "
+            "Available presets are listed in whisperlivekit.presets.PRESETS."
+        ),
+    )
     parser.add_argument(
         "--host",
         type=str,
@@ -147,8 +168,8 @@ def parse_args():
         "--backend",
         type=str,
         default="auto",
-        choices=["auto", "mlx-whisper", "faster-whisper", "whisper", "openai-api", "voxtral", "voxtral-mlx", "qwen3", "qwen3-mlx", "qwen3-mlx-simul", "qwen3-simul", "vllm-realtime"],
-        help="Select the ASR backend implementation. Use 'qwen3-mlx-simul' for Qwen3-ASR SimulStreaming on Apple Silicon (MLX). Use 'qwen3-mlx' for Qwen3-ASR LocalAgreement on MLX. Use 'qwen3-simul' for Qwen3-ASR SimulStreaming (PyTorch). Use 'vllm-realtime' for vLLM Realtime WebSocket.",
+        choices=["auto", "mlx-whisper", "faster-whisper", "whisper", "openai-api", "voxtral", "voxtral-mlx", "qwen3", "qwen3-mlx", "qwen3-mlx-simul", "qwen3-simul", "firered", "sensevoice", "vllm-realtime"],
+        help="Select the ASR backend implementation. Use 'qwen3-mlx-simul' for Qwen3-ASR SimulStreaming on Apple Silicon (MLX). Use 'qwen3-mlx' for Qwen3-ASR LocalAgreement on MLX. Use 'qwen3-simul' for Qwen3-ASR SimulStreaming (PyTorch). Use 'firered' for FireRedASR2 (Mandarin SOTA). Use 'sensevoice' for SenseVoice-Small (zh/en/yue/ja/ko unified). Use 'vllm-realtime' for vLLM Realtime WebSocket.",
     )
     parser.add_argument(
         "--no-vac",
@@ -332,6 +353,11 @@ def parse_args():
         default="600M",
         help="600M or 1.3B",
     )
+
+    # Override parser defaults with preset values so any flag the user did
+    # not pass on the CLI inherits from the preset, while explicit flags win.
+    if preset_defaults:
+        parser.set_defaults(**preset_defaults)
 
     args = parser.parse_args()
     args.transcription = not args.no_transcription

@@ -31,6 +31,78 @@ async def main():
 asyncio.run(main())
 ```
 
+### Cassette replay (GPU-free testing)
+
+For environments without a GPU or model weights (Claude Code Web, CI sandboxes,
+quick iteration on glue logic), the **cassette mechanism** replays a previously
+recorded ASR session. The full pipeline (FFmpeg, VAD, online policy,
+DiffTracker, output formatting) runs for real; only the model inference is
+served from a JSON file.
+
+```python
+# Tier 1 — Web sandbox / no GPU: replay an existing cassette
+async with TestHarness.replay("tests/cassettes/qwen3_ja_short_001.json") as h:
+    await h.feed("tests/fixtures/ja_short.wav", speed=0)
+    result = await h.finish()
+    print(result.text)
+```
+
+```python
+# Tier 2 — GPU machine: record once, commit the cassette JSON
+async with TestHarness.record(
+    cassette_path="tests/cassettes/qwen3_ja_short_001.json",
+    backend="qwen3", lan="ja",
+) as h:
+    await h.feed("tests/fixtures/ja_short.wav", speed=0)
+    await h.finish()
+# Cassette is auto-saved on clean __aexit__.
+```
+
+The CLI helper `scripts/record_cassettes.py` wraps this for batch recording.
+The cassette is hash-keyed on the exact audio buffer passed to `transcribe()`,
+so changes to buffer-trimming or chunking will produce a `CassetteMissError`
+on Tier 1 — that is intentional. Re-record on the GPU machine when this fires.
+
+The `cassette` backend is also exposed via `WhisperLiveKitConfig` (set
+`backend="cassette"` and `cassette_path=...`) so cassettes plug into anything
+that accepts a `TranscriptionEngine`. SimulStreaming and Voxtral HF use
+non-three-tuple flows and need a future cassette family — v1 covers
+LocalAgreement-style backends (Whisper, FasterWhisper, MLXWhisper, Qwen3,
+SenseVoice, FireRedASR2).
+
+#### Web-sandbox network restrictions
+
+When developing on Claude Code Web (or any restricted-egress sandbox), expect:
+
+- ✅ `github.com` and `raw.githubusercontent.com` are reachable — small audio
+  fixtures hosted on GitHub raw URLs can be fetched.
+- ❌ `huggingface.co`, `huggingface-inference.co`, OpenAI's Whisper CDN, and
+  most public dataset CDNs (OpenSLR, archive.org, Wikimedia Commons) are
+  blocked. This means **`faster-whisper`, `openai-whisper`, and HF datasets
+  cannot download model weights or large datasets** in the sandbox.
+- → Real-model cassette recording must happen on a machine with HF access
+  (e.g. a GPU workstation). The Web sandbox can write/read cassettes,
+  exercise the pipeline glue, and run `compute_cer` / `compute_wer` against
+  the recorded outputs, but cannot itself produce a cassette from scratch.
+
+## Configuration presets
+
+Common deployment configurations are registered in `whisperlivekit/presets.py`
+under short names. Apply one via `WhisperLiveKitConfig.from_preset(name, **overrides)`
+or `wlk --preset <name>`. Explicit CLI flags override preset values.
+
+| Preset | Purpose |
+|---|---|
+| `ja-accuracy` | Japanese, accuracy-first (Qwen3 + segment trim 15s) |
+| `ja-realtime` | Japanese, low-latency (Voxtral 480ms + 0.5s chunks) |
+| `ja-broadcast` | Japanese long-form / broadcast (sentence-level trim) |
+| `zh-accuracy` | Chinese accuracy (Qwen3; FireRed becomes the default in Phase 1) |
+| `zh-realtime` | Chinese low-latency (Qwen3 SimulStreaming-KV) |
+| `ja-zh-en` | Multilingual auto-detect (Qwen3) |
+| `hri-multilang` | Robotics / human-robot interaction (Qwen3 + small chunks) |
+| `apple-silicon-{ja,zh}` | MLX on Apple Silicon |
+| `en-fast` | English baseline (faster-whisper large-v3-turbo) |
+
 ## Architecture
 
 WhisperLiveKit is a real-time speech transcription system using WebSockets.
@@ -40,7 +112,17 @@ WhisperLiveKit is a real-time speech transcription system using WebSockets.
 - Two streaming policies:
   - **LocalAgreement** (HypothesisBuffer) -- confirms tokens only when consecutive inferences agree.
   - **SimulStreaming** (AlignAtt attention-based) -- emits tokens as soon as alignment attention is confident.
-- 6 ASR backends: WhisperASR, FasterWhisperASR, MLXWhisper, VoxtralMLX, VoxtralHF, Qwen3.
+- 8 ASR backends, in two streaming tiers:
+  - **True streaming** (KV-cache or dedicated streaming decode, sub-second
+    latency): VoxtralMLX, VoxtralHF, Qwen3-MLX-Simul, Qwen3-SimulKV,
+    SimulStreaming.
+  - **Quasi-realtime** (LocalAgreement re-runs full inference on the growing
+    buffer each cycle; ~1-2 s latency on GPU): WhisperASR, FasterWhisperASR,
+    MLXWhisper, Qwen3, **FireRedASR2** (Mandarin accuracy-first), and
+    **SenseVoice** (multilingual zh/en/yue/ja/ko, emotion + audio events).
+  Pick a "true streaming" backend for robot dialogue / voice UI;
+  "quasi-realtime" backends are appropriate for live captioning, meeting
+  transcription, and offline accuracy-first transcription.
 - **SessionASRProxy** wraps the shared ASR with a per-session language override, using a lock to safely swap `original_language` during `transcribe()`.
 - **DiffTracker** implements a snapshot-then-diff protocol for bandwidth-efficient incremental WebSocket updates (opt-in via `?mode=diff`).
 
@@ -58,6 +140,10 @@ WhisperLiveKit is a real-time speech transcription system using WebSockets.
 | `parse_args.py` | CLI argument parser, returns `WhisperLiveKitConfig` |
 | `test_client.py` | Headless WebSocket test client (`wlk-test`) |
 | `test_harness.py` | In-process testing harness (`TestHarness`) for real E2E testing |
+| `test_cassettes.py` | Record/replay layer (`CassetteRecorder` / `CassetteASR`) — GPU-free pipeline tests via JSON fixtures under `tests/cassettes/` |
+| `firered_asr.py` | `FireRedASR2` — Mandarin SOTA (CER 2.89% avg-4); supports 20+ Chinese dialects, English, code-switching. Wraps the upstream batch+file-path API by writing each chunk to a temp WAV. |
+| `sensevoice_asr.py` | `SenseVoiceASR` — non-autoregressive multilingual model (zh/en/yue/ja/ko) with emotion + audio-event side-channels. Strips SenseVoice metadata tags before emitting tokens. |
+| `presets.py` | Named configuration presets (`ja-realtime`, `zh-accuracy`, `hri-multilang`, …) loaded via `WhisperLiveKitConfig.from_preset()` or `--preset`. |
 | `local_agreement/online_asr.py` | `OnlineASRProcessor` for LocalAgreement policy |
 | `simul_whisper/` | SimulStreaming policy implementation (AlignAtt) |
 
@@ -82,6 +168,25 @@ WhisperLiveKit is a real-time speech transcription system using WebSockets.
    - Add an `elif` branch in `TranscriptionEngine._do_init()` to instantiate the backend.
    - Add a routing case in `online_factory()` to return the appropriate online processor.
 4. Add the backend choice to CLI args in `parse_args.py`.
+5. (optional) Register a preset in `presets.py` so users can opt in via
+   `--preset <name>`.
+6. (optional) Add an isolation test under `tests/` that constructs the
+   wrapper via `__new__` (to skip model loading) and exercises
+   `ts_words` / `segments_end_ts` against handcrafted result dicts —
+   see `tests/test_firered_asr.py` and `tests/test_sensevoice_asr.py`.
+
+### Reference implementations
+
+| Backend | Style | What it demonstrates |
+|---|---|---|
+| `firered_asr.py` (`FireRedASR2`) | Batch + file-path upstream API | How to wrap a backend whose API takes paths, not numpy arrays — write each chunk to a temp WAV. Variant resolution (AED vs LLM) from `model_size`/`model_dir`. |
+| `sensevoice_asr.py` (`SenseVoiceASR`) | Numpy-in, metadata-tagged text out | How to parse a backend that emits `<\|lang\|><\|emotion\|><\|event\|><\|itn\|>` prefix tags and route them into `ASRToken.detected_language` plus side-channel metadata. |
+| `qwen3_asr.py` (`Qwen3ASR`) | Numpy-in, ForcedAligner timestamps | Recommended template for any AED model with native word-level timestamps — closest to what an `ASRBase` subclass should look like. |
+
+All three are non-causal AED and route through LocalAgreement only;
+SimulStreaming (AlignAtt) requires an alignment-heads JSON and a model
+that supports causal attention masking — see `qwen3_simul.py` for that
+pattern.
 
 ## Testing with TestHarness
 
@@ -102,8 +207,16 @@ Key methods:
 - `speakers`, `n_speakers`, `has_silence` -- speaker/silence info
 - `line_at(time_s)`, `speaker_at(time_s)`, `text_at(time_s)` -- query by timestamp
 - `lines_between(start, end)`, `text_between(start, end)` -- query by time range
-- `wer(reference)`, `wer_detailed(reference)` -- evaluation against ground truth
+- `wer(reference)`, `wer_detailed(reference)` -- WER evaluation against ground truth
+- `cer(reference)`, `cer_detailed(reference)` -- CER evaluation (CJK languages: ja/zh/ko)
 - `speech_lines`, `silence_segments` -- filtered line lists
+
+For CJK languages, prefer `cer()` over `wer()`. CER strips whitespace and CJK/ASCII
+punctuation before scoring (see `whisperlivekit.metrics.normalize_cjk_text`), so
+results are robust to formatting differences between reference and hypothesis.
+Word-level WER for ja/zh requires a tokenizer (MeCab or jieba); that is left as
+future work. For now, use `cer()` for ja/zh and the existing `wer()` for
+whitespace-tokenized languages (en, fr, ...).
 
 ## OpenAI-Compatible REST API
 
@@ -130,4 +243,4 @@ The `model` parameter is accepted but ignored (uses the server's configured back
 - Do not create a second `TranscriptionEngine` instance. It is a singleton; the constructor returns the existing instance after the first call.
 - Do not modify `original_language` on the shared ASR directly. Use `SessionASRProxy` for per-session language overrides.
 - Do not assume the frontend handles diff protocol messages. Diff mode is opt-in (`?mode=diff`) and ignored by default.
-- Do not write mock-based unit tests. Use `TestHarness` with real audio for pipeline testing.
+- Do not write mock-based unit tests. Use `TestHarness` with real audio for pipeline testing. The one exception is cassette-replay tests (`TestHarness.replay(...)`) which are still real-pipeline tests — only the model inference is replaced with a recorded JSON.
